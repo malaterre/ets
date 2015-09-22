@@ -49,7 +49,7 @@ static void sis_header_read( struct sis_header * self, FILE * stream )
   fread( (char*)&self->version, 1, sizeof(self->version), stream );
   assert( self->version == 2 ); // version ??
   fread( (char*)&self->dim, 1, sizeof(self->dim), stream );
-  assert( self->dim == 4 ); // dim ?
+  assert( self->dim == 4 || self->dim == 6 ); // dim ?
   fread( (char*)&self->etsoffset, 1, sizeof(self->etsoffset), stream );
   assert( self->etsoffset == 64 ); // offset of ETS struct
   fread( (char*)&self->etsnbytes, 1, sizeof(self->etsnbytes), stream );
@@ -110,28 +110,30 @@ static void ets_header_read( struct ets_header * self, FILE * stream )
   fread( (char*)&self->version, 1, sizeof(self->version), stream );
   assert( self->version == 0x30001 || self->version == 0x30003 ); // some kind of version ?
   fread( (char*)&self->dummy1, 1, sizeof(self->dummy1), stream );
-  assert( self->dummy1 == 2 );
+  assert( self->dummy1 == 2 || self->dummy1 == 4 /* when sis_header->dim == 4 */ );
   fread( (char*)&self->dummy2, 1, sizeof(self->dummy2), stream );
-  assert( self->dummy2 == 3 );
+  assert( self->dummy2 == 3 || self->dummy2 == 1 );
   fread( (char*)&self->dummy3, 1, sizeof(self->dummy3), stream );
-  assert( self->dummy3 == 4 );
+  assert( self->dummy3 == 4 || self->dummy3 == 1 );
   fread( (char*)&self->compression, 1, sizeof(self->compression), stream ); // codec
+  // 0 -> ?
   // 2 -> JPEG ?
   // 3 -> JPEG 2000 ?
-  assert( self->compression == 2 || self->compression == 3 );
+  assert( self->compression == 2 || self->compression == 3 || self->compression == 0 );
   fread( (char*)&self->quality, 1, sizeof(self->quality), stream );
-  assert( self->quality == 90 ); // some kind of JPEG quality ?
+  assert( self->quality == 90 || self->quality == 100 ); // some kind of JPEG quality ?
   fread( (char*)&self->dimx, 1, sizeof(self->dimx), stream );
-  assert( self->dimx == 512 ); // always tile of 512x512 ?
+  //assert( self->dimx == 512 ); // always tile of 512x512 ?
   fread( (char*)&self->dimy, 1, sizeof(self->dimy), stream );
-  assert( self->dimy == 512 ); //
+  //assert( self->dimy == 512 ); //
   fread( (char*)&self->dimz, 1, sizeof(self->dimz), stream );
   assert( self->dimz == 1 ); // dimz ?
 }
 static const char *ets_header_getcomp( struct ets_header * self)
 {
-  if( self->compression == 2 ) return "JPEG";
-  else if( self->compression == 3 ) return "JPEG 2000";
+  if( self->compression == 0 ) return "raw";
+  else if( self->compression == 2 ) return "jpg";
+  else if( self->compression == 3 ) return "jp2";
   assert( 0 );
   return NULL;
 }
@@ -162,7 +164,7 @@ struct tile
 static void tile_read( struct tile * self, FILE * stream )
 {
   fread( (char*)&self->dummy1, 1, sizeof(self->dummy1), stream );
-  assert( self->dummy1 == 4 ); // wotsit ?
+  //assert( self->dummy1 == 4 ); // wotsit ?
   fread( (char*)self->coord, 1, sizeof(self->coord), stream );
   fread( (char*)&self->level, 1, sizeof(self->level), stream );
   fread( (char*)&self->offset, 1, sizeof(self->offset), stream );
@@ -252,10 +254,11 @@ int main(int argc, char *argv[])
   //assert( tileymax + 1 == 14 );
 
   // compute image info:
-  size_t ImageWidth = 512*(tilexmax + 1);
-  size_t ImageLength = 512*(tileymax + 1);
-  size_t TileWidth = 512;
-  size_t TileLength = 512;
+  size_t ImageWidth = eh.dimx*(tilexmax + 1);
+  size_t ImageLength = eh.dimy*(tileymax + 1);
+  assert( eh.dimz == 1 );
+  size_t TileWidth = eh.dimx;
+  size_t TileLength = eh.dimy;
 
   size_t TilesAcross = (ImageWidth + TileWidth - 1) / TileWidth;
   size_t TilesDown = (ImageLength + TileLength - 1) / TileLength;
@@ -270,7 +273,7 @@ int main(int argc, char *argv[])
   const size_t ntiles = TilesPerImage;
   size_t tileidx;
   unsigned char *buffer = NULL;
-  const char format[] = "dumpets%04ld.jpg";
+  const char format[] = "dumpets%04ld.%s";
   char outname[512];
   for( tileidx = 0; tileidx < ntiles; ++tileidx )
     {
@@ -292,7 +295,8 @@ int main(int argc, char *argv[])
         buffer = realloc(buffer, t->numbytes );
         fread( buffer, 1, t->numbytes, stream );
 
-        sprintf( outname, format, tileidx );
+        const char *ext = ets_header_getcomp( &eh );
+        sprintf( outname, format, tileidx, ext );
         FILE * out = fopen( outname, "wb" );
         fwrite( buffer, 1, t->numbytes, out );
         fclose( out );
@@ -302,7 +306,7 @@ int main(int argc, char *argv[])
     else
       {
       // need to make a fake tile
-      fprintf( stdout, "Empty tile!\n" );
+      fprintf( stdout, "Empty tile %u!\n", tileidx );
       }
     }
   // cleanup
